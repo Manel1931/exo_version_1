@@ -140,6 +140,7 @@ CHIP_FLOPS = {
   "AMD Radeon RX 7600": DeviceFlops(fp32=21.5*TFLOPS, fp16=43.0*TFLOPS, int8=86.0*TFLOPS),
   "AMD Radeon RX 7500": DeviceFlops(fp32=16.2*TFLOPS, fp16=32.4*TFLOPS, int8=64.8*TFLOPS),
   ### Qualcomm embedded chips: TODO
+  "JETSON AGX ORIN 32GB": DeviceFlops(fp32=17.65*TFLOPS, fp16=35.3*TFLOPS, int8=70.6*TFLOPS),
 }
 CHIP_FLOPS.update({f"LAPTOP GPU {key}": value for key, value in CHIP_FLOPS.items()})
 CHIP_FLOPS.update({f"Laptop GPU {key}": value for key, value in CHIP_FLOPS.items()})
@@ -173,31 +174,45 @@ async def mac_device_capabilities() -> DeviceCapabilities:
     flops=CHIP_FLOPS.get(chip_id, DeviceFlops(fp32=0, fp16=0, int8=0))
   )
 
-
 async def linux_device_capabilities() -> DeviceCapabilities:
   import psutil
   from tinygrad import Device
 
-  if DEBUG >= 2: print(f"tinygrad {Device.DEFAULT=}")
+  if DEBUG >= 2:
+    print(f"tinygrad {Device.DEFAULT=}")
+
   if Device.DEFAULT == "CUDA" or Device.DEFAULT == "NV" or Device.DEFAULT == "GPU":
     import pynvml
 
     pynvml.nvmlInit()
     handle = pynvml.nvmlDeviceGetHandleByIndex(0)
     gpu_raw_name = pynvml.nvmlDeviceGetName(handle).upper()
-    gpu_name = gpu_raw_name.rsplit(" ", 1)[0] if gpu_raw_name.endswith("GB") else gpu_raw_name
-    gpu_memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
 
-    if DEBUG >= 2: print(f"NVIDIA device {gpu_name=} {gpu_memory_info=}")
+    # For Jetson AGX Orin 32GB, override the GPU name
+    if "ORIN" in gpu_raw_name:
+      gpu_name = "JETSON AGX ORIN 32GB"
+    else:
+      gpu_name = gpu_raw_name.rsplit(" ", 1)[0] if gpu_raw_name.endswith("GB") else gpu_raw_name
+
+    try:
+      gpu_memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+      memory_mb = gpu_memory_info.total // 2**20
+    except pynvml.NVMLError_NotSupported:
+      print("[Warning] pynvml: GPU memory info not supported on this device.")
+      memory_mb = psutil.virtual_memory().total // 2**20
+
+    if DEBUG >= 2:
+      print(f"NVIDIA device {gpu_name=} {memory_mb=}")
 
     pynvml.nvmlShutdown()
 
     return DeviceCapabilities(
       model=f"Linux Box ({gpu_name})",
       chip=gpu_name,
-      memory=gpu_memory_info.total // 2**20,
+      memory=memory_mb,
       flops=CHIP_FLOPS.get(gpu_name, DeviceFlops(fp32=0, fp16=0, int8=0)),
     )
+
   elif Device.DEFAULT == "AMD":
     import pyamdgpuinfo
 
@@ -205,7 +220,8 @@ async def linux_device_capabilities() -> DeviceCapabilities:
     gpu_name = gpu_raw_info.name
     gpu_memory_info = gpu_raw_info.memory_info["vram_size"]
 
-    if DEBUG >= 2: print(f"AMD device {gpu_name=} {gpu_memory_info=}")
+    if DEBUG >= 2:
+      print(f"AMD device {gpu_name=} {gpu_memory_info=}")
 
     return DeviceCapabilities(
       model="Linux Box (" + gpu_name + ")",
@@ -221,6 +237,7 @@ async def linux_device_capabilities() -> DeviceCapabilities:
       memory=psutil.virtual_memory().total // 2**20,
       flops=DeviceFlops(fp32=0, fp16=0, int8=0),
     )
+
 
 
 def windows_device_capabilities() -> DeviceCapabilities:
